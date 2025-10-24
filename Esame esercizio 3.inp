@@ -1,0 +1,147 @@
+set workdir "/Users/ale/Desktop/University"
+open "Bonfiglio_Alessandro.xlsx" --sheet="Foglio3" --quiet
+
+set verbose off
+
+gnuplot oil --time-series --with-lines --output=display
+gnuplot infl --time-series --with-lines --output=display
+gnuplot growth --time-series --with-lines --output=display
+
+adf 0 oil  
+scalar p_oil = $pvalue
+
+adf 0 infl   
+scalar p_infl = $pvalue
+
+adf 0 growth 
+scalar p_growth = $pvalue
+
+summary oil
+summary infl
+summary growth
+
+normtest oil --jbera
+normtest infl --jbera
+normtest growth --jbera
+
+corrgm oil 20 --plot=display
+scalar R1 =ljungbox(oil, 20)
+scalar pval1= pvalue(N,R1)
+printf "Ljung-Box on oil series Q=%.4f, pvalue=%.4f\n", R1, pval1
+scalar R1quad =ljungbox((oil)^2, 20)
+scalar pval1quad= pvalue(X,20,R1quad)
+printf "Ljung-Box on squares oil series Q=%.4f, pvalue=%.4f\n", R1quad, pval1quad
+
+corrgm infl 20 --plot=display
+scalar R2 =ljungbox(infl, 20)
+scalar pval2= pvalue(N,R2)
+printf "Ljung-Box on infl series Q=%.4f, pvalue=%.4f\n", R2, pval2
+scalar R2quad =ljungbox((infl)^2, 20)
+scalar pval2quad= pvalue(X,20,R2quad)
+printf "Ljung-Box on squares infl series Q=%.4f, pvalue=%.4f\n", R2quad, pval2quad
+
+corrgm growth 20 --plot=display
+scalar R3 =ljungbox(growth, 20)
+scalar pval3= pvalue(N,R3)
+printf "Ljung-Box on growth series Q=%.4f, pvalue=%.4f\n", R3, pval3
+scalar R3quad =ljungbox((growth)^2, 20)
+scalar pval3quad= pvalue(X,20,R3quad)
+printf "Ljung-Box on squares groth series Q=%.4f, pvalue=%.4f\n", R3quad, pval3quad
+
+scalar sk1  = skewness(oil)
+scalar kt1  = kurtosis(oil)
+scalar sk2  = skewness(infl)
+scalar kt2  = kurtosis(infl)
+scalar sk3  = skewness(growth)
+scalar kt3  = kurtosis(growth)
+printf "\nSkewness of oil series = %.4f\n", sk1
+printf "Kurtosis of oil series = %.4f  \n", kt1
+printf "\nSkewness of infl series = %.4f\n", sk2
+printf "Kurtosis of infl series = %.4f \n", kt2
+printf "\nSkewness of growth series = %.4f\n", sk3
+printf "Kurtosis of growth series  = %.4f \n", kt3
+
+list X = oil infl growth
+list Z = const
+
+#===============================================
+# VAR
+#===============================================
+
+var 6 X --lagselect 
+scalar p = 1 
+list Xlag = lags(p, X) 
+
+var p X 
+modtest 3 --autocorr --univariate
+eval $test ~ $pvalue 
+modtest 3 --autocorr 
+eval $test ~ $pvalue 
+
+modtest 3 --arch --univariate
+eval $test ~ $pvalue 
+modtest 3 --arch
+eval $test ~ $pvalue 
+
+modtest --normality
+eval $test ~ $pvalue 
+
+#===============================================
+# SVAR -- CHOLESKI
+#===============================================
+
+include SVAR.gfn
+
+Mod = SVAR_setup("C", X, Z, 1)  
+
+SVAR_restrict(&Mod, "C", 1, 3, 0)
+SVAR_restrict(&Mod, "C", 1, 2, 0)
+SVAR_restrict(&Mod, "C", 2, 3, 0)
+
+SVAR_estimate(&Mod)
+bfail = SVAR_boot(&Mod, 1024, 0.68, 0)
+
+
+IRFplot(&Mod, 1, 1)
+IRFplot(&Mod, 1, 2)
+IRFplot(&Mod, 1, 3)
+IRFplot(&Mod, 2, 1)
+IRFplot(&Mod, 2, 2)
+IRFplot(&Mod, 2, 3)
+IRFplot(&Mod, 3, 1)
+IRFplot(&Mod, 3, 2)
+IRFplot(&Mod, 3, 3)
+
+#===============================================
+# SVAR -- AB
+#===============================================
+
+list Z = const 
+
+AB_VAR = SVAR_setup("AB", X, Z, 1)
+AB_VAR.horizon = 48
+
+SVAR_restrict(&AB_VAR, "Adiag", 1) 
+SVAR_restrict(&AB_VAR, "A", 1, 3, 0)
+SVAR_restrict(&AB_VAR, "A", 1, 2, 0) 
+SVAR_restrict(&AB_VAR, "A", 3, 2, 0) 
+SVAR_restrict(&AB_VAR, "Bdiag", NA) 
+AB_VAR.snames = defarray("oil", "infl", "growth") 
+
+SVAR_estimate(&AB_VAR)
+Amat = AB_VAR.S1
+Bmat = AB_VAR.S2
+
+printf "Estimated contemporaneous impact matrix (x100) =\n%10.6f", \
+100*inv(Amat)*Bmat 
+rej = SVAR_boot(&AB_VAR, 2000, 0.68)
+
+IRFplot(&AB_VAR, 1, 1) 
+IRFplot(&AB_VAR, 2, 1) 
+IRFplot(&AB_VAR, 3, 1) 
+IRFplot(&AB_VAR, 1, 2) 
+IRFplot(&AB_VAR, 2, 2) 
+IRFplot(&AB_VAR, 3, 2) 
+IRFplot(&AB_VAR, 1, 3) 
+IRFplot(&AB_VAR, 2, 3) 
+IRFplot(&AB_VAR, 3, 3) 

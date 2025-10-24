@@ -1,0 +1,262 @@
+# ================================
+# 0) CARICA DATI
+# ================================
+set workdir "/Users/ale/Desktop/University"
+open "Bonfiglio_Alessandro.xlsx" --sheet=Foglio1
+
+series r=diff(lp)
+series volatility=r^2
+
+# ================================
+# 1) ESPLORAZIONE RAPIDA
+# ================================
+printf "\n>>> Descriptive statistics rendimenti (d_lp)\n"
+summary r
+summary volatility
+printf "\n>>> Descriptive statistics volatility (d_lp)\n"
+
+# Skewness e Kurtosis
+scalar sk  = skewness(r)
+scalar kt  = kurtosis(r)
+scalar exk = kt - 3
+scalar sk2  = skewness(volatility)
+scalar kt2  = kurtosis(volatility)
+scalar exk2 = kt2 - 3
+printf "\nSkewness  = %.4f\n", sk
+printf "Kurtosis  = %.4f (Excess = %.4f)\n", kt, exk
+printf "\nSkewness2  = %.4f\n", sk2
+printf "Kurtosis2  = %.4f (Excess2 = %.4f)\n", kt2, exk2
+
+# ADF test (unit root test)
+printf "\nADF su r:\n"
+adf 0 r
+scalar p_adf = $pvalue
+
+printf "\nADF su volatility:\n"
+adf 0 volatility
+scalar p_vol = $pvalue
+
+# ACF/PACF di r e ACF con Q-stat di r^2 (proxy della varianza)
+corrgm r  20 --plot=display
+corrgm volatility  20 --plot=display
+normtest r --jbera
+normtest volatility --jbera
+scalar R = ljungbox(r, 20)
+scalar pva = pvalue(X, 20, R)
+printf "Ljung–Box(20): Q = %.4f, p-value = %.4f\n", R, pva
+scalar VOLATILITY = ljungbox(volatility, 20)
+scalar pva2 = pvalue(X, 20, VOLATILITY)
+printf "Ljung–Box(20): Q = %.4f, p-value = %.4f\n", VOLATILITY, pva2
+
+# ================================
+# 2) TEST ARCH-LM SU MEDIA SEMPLICE
+# ================================
+# 1) OLS per ottenere i residui
+ols r const
+series e  = $uhat
+series e2 = e^2
+
+# 2) Regressione ausiliaria: e_t^2 su i suoi lag (qui 10)
+list L = e2(-1 to -10)
+ols e2 const L
+
+# 3) Statistica LM = T * R^2  ~  Chi^2(10)
+scalar k   = nelem(L)
+scalar LM  = $nobs * $rsq
+scalar pLM = pvalue(X, 10, LM)
+
+printf "ARCH-LM(%d): LM = %.3f, p-value = %.6g\n", k, LM, pLM
+
+# ================================
+# 3) MODELLO ARCH(1)
+# ================================
+
+printf "\n>>> STIMA MODELLO ARCH(1) <<<\n"
+
+# Stima dell'ARCH(1)
+garch 0 1 ; r const
+
+series z_arch1= $h
+series arch_sd = sqrt(z_arch1)
+
+series z_arch  = $uhat / sqrt($h)
+printf "\n>>> Ljung-Box su residui standardizzati ARCH (lag 20)\n"
+corrgm z_arch 20 --plot=display
+scalar Q_arch = ljungbox(z_arch, 20)
+scalar pval_arch = pvalue(X, 20, Q_arch)
+printf "Ljung–Box(20): Q = %.4f, p-value = %.4f\n", Q_arch, pval_arch
+series z2_arch=(z_arch)^2
+corrgm z2_arch 20 --plot=display
+scalar Q2_arch = ljungbox(z2_arch, 20)
+scalar pval2_arch = pvalue(X, 20, Q2_arch)
+printf "Ljung–Box(20): Q = %.4f, p-value = %.4f\n", Q2_arch, pval2_arch
+gnuplot arch_sd --time-series --with-lines --time-series 
+
+#autocorrelation of ARCH
+series zl1_arch = z_arch(-1)
+scalar rho_a = corr(z_arch, zl1_arch)
+
+# ================================
+# 4) MODELLO GARCH(1,1) con AR(1) in media 
+# ================================
+printf "\n>>> Stima GARCH(1,1) con AR(1) in media e Student-t\n"
+printf "\n=== Stima GARCH(1,1) Student-t con SE robusti ===\n"
+garch 1 1 ; r const --robust
+
+# Persistenza e half-life
+matrix b = $coeff
+scalar a1 = b[3]    
+scalar b1 = b[4]  
+scalar pers = a1 + b1
+scalar halflife = ln(0.5)/ln(pers)
+printf "alpha(1)=%.6f  beta(1)=%.6f  alpha+beta=%.6f  Half-life=%.2f periodi\n", a1, b1, pers, halflife
+series h_garch   = $h
+series garch_sd  = sqrt(h_garch)
+
+# ================================
+# 4) DIAGNOSTICA POST-STIMA GARCH
+# ================================
+
+series z_garch  = $uhat / sqrt($h)  
+series z2_garch = (z_garch)^2
+printf "\n>>> Ljung-Box su residui standardizzati GARCH (lag 20)\n"
+corrgm z_garch  20 --plot=display
+scalar Q_garch = ljungbox(z_garch, 20)
+scalar pval_garch = pvalue(X, 20, Q_garch)
+printf "Ljung–Box(20): Q = %.4f, p-value = %.4f\n", Q_garch, pval_garch
+
+printf "\n>>> Ljung-Box su residui standardizzati al quadrato GARCH (lag 20)\n"
+corrgm z2_garch 20 --plot=display
+scalar Q2_garch = ljungbox(z2_garch, 20)
+scalar pval2_garch = pvalue(X, 20, Q2_garch)
+printf "Ljung–Box(20): Q = %.4f, p-value = %.4f\n", Q2_garch, pval2_garch
+
+printf "\n>>> Test di normalità Jarque-Bera sui residui standardizzati\n"
+normtest z_garch --jbera
+normtest z_arch --jbera
+
+# Volatilità condizionata (sigma_t = sqrt(h_t))
+series garch_sd = sqrt($h)
+gnuplot garch_sd --time-series --with-lines --time-series 
+
+# ================================
+# 5)MODELLO T-GARCH
+# ================================
+include gig.gfn
+bundle g_t = gig_setup(r)      # default: GARCH(1,1)
+gig_set_dist(&g_t, 1)          # 1 = Student-t
+
+gig_estimate(&g_t)
+
+# Verifica bundle e coeff
+print g_t                     
+print g_t.coeff     
+           
+# Ricava i gradi di libertà stimati (df) della t
+scalar nu = g_t.coeff[rows(g_t.coeff),1]
+printf "Gradi di liberta' (nu) stimati: %.3f\n", nu
+
+# Residui standardizzati e grafici
+series z_t = g_t.stduhat       
+normtest z_t --jbera               
+qqplot z_t --output=display  
+
+gig_plot(&g_t)                 # residui & sigma_t
+gig_dplot(&g_t)                # kernel vs densita' t( nu ) stimata
+
+# ================================
+# 6)MODELLO EWMA
+# ================================
+
+smpl --no-missing r                    
+
+# Parametro di smoothing (RiskMetrics giornaliero)
+scalar lambda = 0.94
+
+# Inizializza
+series ewma_var = NA
+scalar t0 = $t1                
+ewma_var[t0] = r[t0]^2       
+
+# Ricorsione EWMA su tutto il campione corrente
+loop i = t0+1 .. $t2
+    ewma_var[i] = (1 - lambda)*r[i-1]^2 + lambda*ewma_var[i-1]
+endloop
+
+# Volatilità (deviazione standard)
+series ewma_sd = sqrt(ewma_var)
+
+gnuplot ewma_sd --time-series --with-lines --output=display
+
+gnuplot ewma_sd arch_sd garch_sd  --time-series --with-lines --output=display
+
+# === Log-likelihood EWMA (assunzione Normale) ===================
+
+smpl --no-missing r
+
+series ll_ewma_t = -0.5*( ln(2*$pi) + ln(ewma_var) + (r^2)/ewma_var )
+scalar LL_EWMA   = sum(ll_ewma_t)
+
+scalar k_fix = 1
+scalar Tll   = $nobs
+scalar AIC_EWMA = -2*LL_EWMA + 2*k_fix
+scalar BIC_EWMA = -2*LL_EWMA + k_fix*ln(Tll)
+
+printf "\n>>> EWMA (Normale): Log-likelihood = %.3f\n", LL_EWMA
+printf "    AIC(k=%d) = %.3f   BIC = %.3f\n", k_fix, AIC_EWMA, BIC_EWMA
+
+smpl --full
+
+printf "EWMA lambda=%.2f  --> Half-life = %.2f periodi\n", lambda, ln(0.5)/ln(lambda)
+
+# ===========================================================
+# 7 Confronto ARCH vs GARCH vs EWMA
+# ===========================================================
+# Allinea il campione per confronto
+smpl --no-missing ewma_sd garch_sd arch_sd
+#residui standardizzati
+series z_e = r / ewma_sd                     # EWMA
+series zl1_garch = z_garch(-1) 				# GARCH
+series z_e_l1 = z_e(-1)						# EWMA
+scalar rho_g = corr(z_garch, zl1_garch)   	# GARCH: corr residui con il loro lag1
+scalar rho_e = corr(z_e, z_e_l1)   			# EWMA: corr residui con il loro lag1
+scalar rho_a = corr(z_arch, zl1_arch) 		# ARCH: corr residui con il loro lag1
+
+printf "\n>>> CONFRONTO TRA VOLATILITÀ EWMA E GARCH <<<\n"
+printf "------------------------------------------------------\n"
+printf "Statistiche descrittive (solo periodo comune)\n"
+printf "------------------------------------------------------\n"
+printf "               |     EWMA     |     GARCH     | ARCH         \n"
+printf "------------------------------------------------------\n"
+printf "Media           | %.6f  | %.6f |  %.6f\n", mean(ewma_sd), mean(garch_sd), mean(arch_sd) 
+printf "Dev. standard   | %.6f  | %.6f |  %.6f\n", sd(ewma_sd), sd(garch_sd), sd(arch_sd)
+printf "Minimo          | %.6f  | %.6f |  %.6f\n", min(ewma_sd), min(garch_sd), min(arch_sd) 
+printf "Massimo         | %.6f  | %.6f |  %.6f\n", max(ewma_sd), max(garch_sd), max(arch_sd) 
+printf "Correlazione    | %.6f  | %.6f |  %.6f\n", rho_g,rho_e, rho_a
+printf "------------------------------------------------------\n"
+
+# =================== Confronto su accuratezza (EWMA vs ARCH vs GARCH) ===================
+# metriche: QLIKE = mean[ ln(h_t) + r_t^2 / h_t ], MSE = mean[(r_t^2 - h_t)^2]
+# EWMA
+smpl ok(ewma_var) --restrict
+scalar QLIKE_EWMA = mean( ln(ewma_var) + volatility/ewma_var )
+scalar MSE_EWMA   = mean( (volatility - ewma_var)^2 )
+smpl --full
+# ARCH(1)
+smpl ok(z_arch1) --restrict
+scalar QLIKE_ARCH = mean( ln(z_arch1) + volatility/z_arch1 )
+scalar MSE_ARCH   = mean( (volatility - z_arch1)^2 )
+smpl --full
+# GARCH(1,1)
+smpl ok(h_garch) --restrict
+scalar QLIKE_GARCH = mean( ln(h_garch) + volatility/h_garch)
+scalar MSE_GARCH   = mean( (volatility - h_garch)^2 )
+smpl --full
+
+printf "\n================ Confronto QLIKE / MSE (più basso = meglio) ==================\n"
+printf "EWMA   -> QLIKE=%g   MSE=%g\n", QLIKE_EWMA, QLIKE_EWMA ? MSE_EWMA : MSE_EWMA
+printf "ARCH(1)-> QLIKE=%g   MSE=%g\n", QLIKE_ARCH, MSE_ARCH
+printf "GARCH  -> QLIKE=%g   MSE=%g\n", QLIKE_GARCH, MSE_GARCH
+
+# Ripristina il campione
+smpl --full
